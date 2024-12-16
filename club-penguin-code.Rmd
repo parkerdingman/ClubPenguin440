@@ -1,0 +1,404 @@
+---
+title: "Analysis of The Best Year for Club Penguin Parties"
+output:
+  pdf_document: default
+  html_document: default
+author:
+  - Parker Dingman
+date:
+  - 12/16/2024
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+penguins_original <- read.csv("Club_Penguin_All_Parties_FINAL.csv")
+penguins_data <- penguins_original
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+penguins_data <- penguins_data %>%
+  filter(Start.date != "" & End.date != "")
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+library(dplyr)
+library(lubridate)
+
+# Add "total days" column
+penguins_data <- penguins_data %>%
+  mutate(
+    # Parse Start.date and End.date with the correct year from the "Year" column
+    Start.date = parse_date_time(paste(Year, Start.date), orders = "ymd"),
+    End.date = parse_date_time(paste(Year, End.date), orders = "ymd"),
+    
+    # Adjust year for wrap-around cases
+    End.date = if_else(!is.na(Start.date) & !is.na(End.date) & End.date < Start.date, 
+                       End.date + years(1), 
+                       End.date),
+    
+    # Compute total days or set to 0 for invalid formats
+    total_days = if_else(!is.na(Start.date) & !is.na(End.date),
+                         as.integer(difftime(End.date, Start.date, units = "days")),
+                         0)
+  )
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+penguins_data <- penguins_data %>%
+  mutate(
+    # Manually input dates for specific Party values
+    Start.date = case_when(
+      Party == "Beta Test Party" ~ parse_date_time("2005-Sep-21", orders = "ymd"),
+     (Party == "New Year's Day 2015" & Year == 2015) ~ parse_date_time("2015-Jan-01", orders = "ymd"),
+     (Party == "New Year's Day 2016" & Year == 2016) ~ parse_date_time("2016-Jan-01", orders = "ymd"),
+      TRUE ~ Start.date  # Keep existing Start.date for all other rows
+    ),
+    End.date = case_when(
+      Party == "Beta Test Party" ~ parse_date_time("2005-Sep-21", orders = "ymd"),
+      Party == "Server Testing 2005" ~ parse_date_time("2006-Feb-13", orders = "ymd"),
+      Party == "Valentine's Day Celebration" ~ parse_date_time("2006-Feb-14", orders = "ymd"),
+      Party == "1st Anniversary Party" ~ parse_date_time("2006-Oct-24", orders = "ymd"),
+      Party == "Christmas Party 2006" ~ parse_date_time("2006-Dec-31", orders = "ymd"),
+      Party == "Christmas Party 2006" ~ parse_date_time("2006-Dec-31", orders = "ymd"),
+      Party == "New Year's Day 2007" ~ parse_date_time("2007-Jan-02", orders = "ymd"),
+      Party == "2nd Anniversary Party" ~ parse_date_time("2007-Oct-24", orders = "ymd"),
+      Party == "New Year's Day 2008" ~ parse_date_time("2008-Jan-02", orders = "ymd"),
+      Party == "New Year's Day 2009" ~ parse_date_time("2009-Jan-02", orders = "ymd"),
+      Party == "New Year's Day 2011" ~ parse_date_time("2011-Jan-02", orders = "ymd"),
+      Party == "Holiday Party 2012" ~ parse_date_time("2013-Jan-04", orders = "ymd"),
+      Party == "Holiday Party 2013" ~ parse_date_time("2014-Jan-04", orders = "ymd"),
+      Party == "New Year's Day 2014" ~ parse_date_time("2014-Jan-02", orders = "ymd"),
+     (Party == "New Year's Day 2015" & Year == 2014) ~ parse_date_time("2014-Dec-31", orders = "ymd"),
+     (Party == "New Year's Day 2015" & Year == 2015) ~ parse_date_time("2015-Jan-02", orders = "ymd"),
+      Party == "Operation: Crustacean" ~ parse_date_time("2016-Feb-02", orders = "ymd"),
+      Party == "Holiday Party 2015" ~ parse_date_time("2016-Jan-06", orders = "ymd"),
+     (Party == "New Year's Day 2016" & Year == 2015) ~ parse_date_time("2015-Dec-31", orders = "ymd"),
+      Party == "Holiday Party 2016" ~ parse_date_time("2017-Jan-04", orders = "ymd"),
+      TRUE ~ End.date  
+    )
+  )
+
+penguins_data <- penguins_data %>%
+  mutate(
+    total_days = as.integer(difftime(End.date, Start.date, units = "days")) + 1,
+    had_free_items = if_else(Free.items == "None", 0, 1),
+    had_special_notes = if_else((Notes == "None" | Notes == ""), 0, 1)
+  )
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+penguins_cleaned <- penguins_data %>%
+  select(Year, Party, Start.date, End.date, total_days, had_free_items, had_special_notes, )
+
+penguins_cleaned <- penguins_cleaned %>%
+  rowwise() %>%
+  mutate(
+    spans_years = year(Start.date) != year(End.date) # Flag rows spanning multiple years
+  ) %>%
+  ungroup() %>%
+  # Process rows individually
+  group_split(row_number()) %>% # Split into individual rows
+  purrr::map_dfr(function(row) {
+    if (row$spans_years) {
+      # Split into two rows for spanning years
+      tibble(
+        Party = c(row$Party, row$Party),
+        Year = c(year(row$Start.date), year(row$End.date)),
+        Start.date = c(row$Start.date, ymd(paste0(year(row$End.date), "-01-01"))),
+        End.date = c(ymd(paste0(year(row$Start.date), "-12-31")), row$End.date),
+        total_days = c(
+          as.integer(difftime(ymd(paste0(year(row$Start.date), "-12-31")), row$Start.date, units = "days")) + 1,
+          as.integer(difftime(row$End.date, ymd(paste0(year(row$End.date), "-01-01")), units = "days")) + 1
+        ),
+        had_free_items = c(row$had_free_items, row$had_free_items),
+        had_special_notes = c(row$had_special_notes, row$had_special_notes)
+      )
+    } else {
+      # Keep row as-is for single-year entries
+      tibble(
+        Party = row$Party,
+        Year = row$Year,
+        Start.date = row$Start.date,
+        End.date = row$End.date,
+        total_days = as.integer(difftime(row$End.date, row$Start.date, units = "days")) + 1,
+        had_free_items = row$had_free_items,
+        had_special_notes = row$had_special_notes
+      )
+    }
+  })
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+summary_data <- penguins_cleaned %>%
+  group_by(Year) %>%
+  summarise(
+    total_days_sum = sum(total_days, na.rm = TRUE),
+    count = n() # Add count of rows per year
+  )
+
+# Create the bar plot
+p1 <- ggplot(summary_data, aes(x = as.factor(Year), y = total_days_sum, fill = as.factor(Year))) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(total_days_sum)), 
+            vjust = -0.5, size = 3.5, color = "black") + # Add labels
+  scale_fill_manual(values = scales::hue_pal()(nrow(summary_data))) + # Different colors for each bar
+  labs(
+    title = "Club Penguin Party Days by Year",
+    subtitle = "Note: Days with Two Different Parties are Double-Counted",
+    x = "Year",
+    y = "Total Party Days",
+    fill = "Year"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") # Rotate x-axis labels for better readability
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+summary_data <- penguins_cleaned %>%
+  group_by(Year) %>%
+  summarise(
+    total_days_sum = sum(total_days, na.rm = TRUE),
+    count = n() # Add count of rows per year
+  )
+
+# Create the bar plot for count
+p2 <- ggplot(summary_data, aes(x = as.factor(Year), y = count, fill = as.factor(Year))) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = count), 
+            vjust = -0.5, size = 3.5, color = "black") + # Add labels
+  scale_fill_manual(values = scales::hue_pal()(nrow(summary_data))) + # Different colors for each bar
+  labs(
+    title = "Number of Club Penguin Parties by Year",
+    subtitle = "Note: New Years Parties Count for 'Old Year' and 'New Year'",
+    x = "Year",
+    y = "Total Party Count",
+    fill = "Year"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") # Rotate x-axis labels for better readability
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+summary_data <- penguins_cleaned %>%
+  group_by(Year) %>%
+  summarise(
+    total_free_items = sum(had_free_items, na.rm = TRUE), # Sum of had_free_items
+    total_count = n() # Total number of entries per year
+  ) %>%
+  mutate(proportion_free_items = total_free_items / total_count) # Calculate the proportion
+
+# Create the bar plot for proportion of had_free_items
+ p3 <- ggplot(summary_data, aes(x = as.factor(Year), y = proportion_free_items, fill = as.factor(Year))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = scales::percent(proportion_free_items)), 
+            vjust = -0.5, size = 3, color = "black") + # Add labels in percentage format
+  scale_fill_manual(values = scales::hue_pal()(nrow(summary_data))) + # Different colors for each bar
+  labs(
+    title = "Proportion of Parties with Free Items by Year",
+    subtitle = "Note: New Years Parties Count for 'Old Year' and 'New Year'",
+    x = "Year",
+    y = "% of Parties with Free Items",
+    fill = "Year"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") # Rotate x-axis labels for better readability
+```
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+summary_data <- penguins_cleaned %>%
+  group_by(Year) %>%
+  summarise(
+    total_special_notes = sum(had_special_notes, na.rm = TRUE), # Sum of had_special_notes
+    total_count = n() # Total number of entries per year
+  ) %>%
+  mutate(proportion_special_notes = total_special_notes / total_count) # Calculate the proportion
+
+# Create the bar plot for proportion of had_special_notes
+p4 <- ggplot(summary_data, aes(x = as.factor(Year), y = proportion_special_notes, fill = as.factor(Year))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = scales::percent(proportion_special_notes)), 
+            vjust = -0.5, size = 3, color = "black") + # Add labels in percentage format
+  scale_fill_manual(values = scales::hue_pal()(nrow(summary_data))) + # Different colors for each bar
+  labs(
+    title = "Proportion of Parties with Special Notes by Year",
+    subtitle = "Note: New Years Parties Count for 'Old Year' and 'New Year'",
+    x = "Year",
+    y = "% of Parties with Special Notes",
+    fill = "Year"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") # Rotate x-axis labels for better readability
+```
+
+## Introduction
+
+Club Penguin was an online multiplayer game that was available from October 2005 to March 2017. The game was targeted to children aged 6 to 14, although millions of players across all ages played as well. The game involved visiting different rooms, areas, mini-games, and chatting with other online players with a controlled, kid-friendly chat feature. In addition, players could personalize their experience by creating a custom penguin avatar, decorating personal igloo, and caring for pets called puffles. About every month, a seasonal or themed party was held for members to enjoy. This allowed for a unique experience where players could enjoy an altered world that was changed to match the party theme.
+
+The business model of Club Penguin involved a free experience for all members, and a "Club Penguin Premium" experience that 10% of players opted to pay a monthly subscription for. In September 2015, Club Penguin began to show a decline when they closed down their German and Russian sites. In January 2017, Club Penguin announced their website would shut down on March 29, 2017. This was a tragic announcement. A final two-month "Waddle On Party" commenced during this time period for players to celebrate some final moments on their beloved game. 
+
+Club Penguin parties were a highlight of the user experience and game play. The goal of this analysis is to gain insights on the best year for partying in Club Penguin. Results of this analysis will allow former users to relive their glory days, and potentially identify trends correlated with Club Penguin's discontinuation in 2017.
+
+## Data
+
+Data regarding Club Penguin is quite scarce. Fortunately, a Kaggle user named Saksham Nanda compiled a dataset with all Club Penguin Parties, their year, their start-date, their end-date, and some column with notes on various party features. 
+
+A few parties were missing start-dates and end-dates. Those rows were dropped during data cleaning. In addition, not all dates were formatted the same way, so some strings during data-cleaning were manually entered. New Years Parties were an issue when analyzing data year-by-year. For example, when a "New Years 2015 Party" would start December 2014 and wrap-around and end the first week of January 2015. To resolve this during data-cleaning, the "New Years 2015 Party" was split into two parties- one for the 2014 portion and one for the 2015 portion. Creating a duplicate party-row was a tradeoff for more convenient year-by-year data.
+
+Notes on various party features, such as "Free-Items" provided an opportunity for a more rich text-analysis. However, a more simple approach was taken: generating a boolean variable "had_free_items" that indicated whether or not "Free-Items" said "None" for each party. Some parties had "special notes," such as "this was the first Club Penguin Party." This was simplified into a Boolean variable, "had_special_notes" to indicate if a party was unique in someway.
+
+Unfortunately, no data was provided on the number of users in attendance at each party. This would have been an excellent metric to study, and a great indicator of how popular a particular party was. This analysis will focus mostly on party length in days, and number of parties per year. The dictionary below simplifies the variables to work with after data-cleaning:
+
+-   $Party$: The party name.
+-   $Year$: Annual year when party occurred. Note that parties occurring in two years were split into duplicate party-names with different years. 
+-   $Start Date$: The first date of the party, guaranteed to match $Year$.
+-   $End Date$: The last date of the party, guaranteed to match $Year$.
+-   $Total Days$: 1 + $End Date$ - $Start Date$
+-   $Had Free Items$: Boolean variable, indicates if party gave users free party-themed items.
+-   $Had Special Notes$: Boolean variable, indicates if original kaggle dataset recorded unique notes for this party.
+
+## Exploratory Data Analysis
+
+The following plots group "Party Rows" by year, and explore different distributions of key variables. Note that Club Penguin started in October 2005 and ended in March 2017. These years (2005 and 2017) are partial years, so some of their histograms counts are lower than other years. 
+
+```{r, echo=FALSE, warning = FALSE, message=FALSE, fig.width = 6, fig.height = 4.25}
+p1 
+p2
+p3
+p4
+```
+
+"Club Penguin Party Days by Year" sums up all each party's length and adds them together. When ignorning the partial 2005 and 2017 years, the histogram shows an upward trend. Note that the year 2016 has more than 365 party days- this is due to overlapping Club Penguin parties on the same day. For example, the "Halloween Party 2016" occurred between 2016-09-28 and 2016-11-02 while the "11th Anniversary Party" occurred between 2016-10-19 and 2016-11-02. This has overlap during the end of Otctober.
+
+"Number of Club Penguin Parties by Year" seems to average around 19 parties when ignoring years 2005 and 2017. However, note that 2016 only had 14 unique parties. This is notable because 2016 had the most "Party Days" out of all years, indicating game developers did not rotate parties as much as usual years.
+
+No clear trend is shown by the "Proportion of Parties with Free Items by Year" histogram. The "Proportion of Parties with Special Notes by Year" histogram creates a "U shape." This shape is inline with the original data set, where the first and last parties of an annual holiday would have notes such as "First Annual Halloween party" or "Last Annual New Years party."
+
+## Methodology
+
+The Methodology will drop years 2005 and 2017 from consideration when trying to analyze the best year(s) for parties in Club Penguin. The first and last year are partial years, have special parties surrounding them, and are simply not comparable to the full-length years.
+
+The EDA above explores all columns in the limited dataset. However, the methodology will focus on two key variables: "Party Days Per Year" and "Number of Parties Per Year." Although some users may really like getting free items at their parties, the EDA shows no obvious outliers or trends for the full-length years. The "Special Notes" in the original data set doesn't necessarily indicate user satisfaction, just historical comments. Focusing methodology onto just two variables will allow for more reasonable interpretation than trying to combine all four of these variables into some alternate scoring system.
+
+To evaluate candidates for potential best-party-years, we will perform two one-tailed z-tests for population means at the $\alpha$ = 0.05 level. These two tests will be repeated across all years, to identify potential best-party-years:
+
+First One-Tailed Z-Test:
+$H_0$: The total "party days" for a given year are equal to the overall mean of total "party days" across all years.
+$H_a$: The total "party days" for a given year are greater than the overall mean of total "party days" across all years.
+
+Second One-Tailed Z-Test:
+$H_0$: The total "number of parties" for a given year are equal to the overall mean of "number of parties" across all years.
+$H_a$: The total "number of parties" for a given year are greater than the overall mean of "number of parties" across all years.
+
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+penguins_cleaned_full_years <- penguins_cleaned %>%
+  filter(!Year %in% c(2005, 2017))
+
+summary_data <- penguins_cleaned_full_years %>%
+  group_by(Year) %>%
+  summarise(
+    total_days_sum = sum(total_days, na.rm = TRUE) 
+  )
+
+overall_mean <- mean(summary_data$total_days_sum, na.rm = TRUE)
+overall_sd <- sd(summary_data$total_days_sum, na.rm = TRUE)
+
+summary_data <- summary_data %>%
+  mutate(
+    z_score = (total_days_sum - overall_mean) / overall_sd
+  )
+
+summary_data <- summary_data %>%
+  mutate(
+    p_value = 1 - pnorm(z_score)
+  )
+
+summary_data_days <- summary_data %>%
+  select(Year, z_score, p_value) %>%
+  mutate(
+    z_score = round(z_score, 3),
+    p_value = round(p_value, 3)
+  )
+summary_data_days
+```
+
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+# Remove 2005 and 2017
+penguins_cleaned_full_years <- penguins_cleaned %>%
+  filter(!Year %in% c(2005, 2017))
+
+summary_data <- penguins_cleaned_full_years %>%
+  group_by(Year) %>%
+  summarise(
+    total_parties_ct = n()  # Count of parties per year (using n() to count rows)
+  )
+
+overall_mean <- mean(summary_data$total_parties_ct, na.rm = TRUE)
+overall_sd <- sd(summary_data$total_parties_ct, na.rm = TRUE)
+
+summary_data <- summary_data %>%
+  mutate(
+    z_score = (total_parties_ct - overall_mean) / overall_sd
+  )
+
+summary_data <- summary_data %>%
+  mutate(
+    p_value = 1 - pnorm(z_score)
+  )
+
+summary_data_ct <- summary_data %>%
+  select(Year, z_score, p_value) %>%
+  mutate(
+    z_score = round(z_score, 3),
+    p_value = round(p_value, 3)
+  )
+summary_data_ct
+```
+
+## Results
+
+```{r, echo=FALSE, warning = FALSE, message=FALSE, fig.width = 6, fig.height = 4.25}
+kable(summary_data_days, format = "markdown", col.names = c("Year", "Z-Score", "P-Value"), caption = "Evidence of Above Average Annual Party Days") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+kable(summary_data_ct, format = "markdown", col.names = c("Year", "Z-Score", "P-Value"), caption = "Evidence of Above Average Annual Party Ct") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+```
+
+Year 2016 in the "Evidence of Above Average Annual Party Days" table has a p-value of 0.037. The p-value is less than the alpha level, which suggests it is favorable to reject the null hypothesis. There is enough evidence to suggest that 2016 had more party days than the average year.
+
+Year 2015 in the "Evidence of Above Average Annual Party Ct" table has a p-value of 0.036. The p-value is less than the alpha level, which suggests it is favorable to reject the null hypothesis. There is enough evidence to suggest that 2015 had more parties than the average year.
+
+Based off the original methodology, which looks for any reason to favor a particular year as a "best-party-year," the results show 2015 and 2016 are good candidates for being the best-party-year in Club Penguin. The discussion section will look beyond the methodology and contextualize reasons to favor one year over the other.
+
+## Discussion
+
+The original data set was missing a key metric for measuring the success of any party: attendance. Without attendance for each party, and eventually for each year, it becomes very difficult to measure what a "good year of partying" look like. This is why "number of parties" and "number of days with a party" were selected- they were the most clear annual numeric the dataset could provide. Even natural language processing on some of the "party notes" would be tough to do, as the notes were often empty or uninformative. 
+
+Given the lack of data, the methodology wanted to favor any reason to favor a particular year. One flaw of this approach can be found in the EDA, where year 2016 only has 14 parties when compared to the average of 19 for full-length years. Therefore, 2016 had only a few abnormally-long parties. The 1-tailed Z-test did not catch this underperformance. When picking between 2015 and 2016, the EDA (along with the methodology and results) shows that 2015 is the winner as the "best-party-year" based on the data provided.
+
+Club Penguin had it's first company layoff in 2015 and shut-down in 2017. It's possible that developers wanted to keep their jobs in 2015 by adding more parties to the game (in hope of attracting more users). This is just speculation- it could also be a mere coincidence.
+
+Of course, if someone really felt sentimental about the first party in 2005, or the final "Waddle On Party" in 2017, they would consider one of those as the best-party-year. Overall, this analysis attempts to quantify a very opinionated question on what makes a good year of partying.
+
+## References
+
+- Wikipedia Page on Club Penguin: https://en.wikipedia.org/wiki/Club_Penguin
+- Kaggle and Kaggle User Saksham Nanda: https://www.kaggle.com/datasets/mllion/club-penguin-2005-2017-all-parties
+- ChatGPT: https://chatgpt.com/share/675fe9d9-6b30-8006-a643-73a3f57b95ab
+
+
